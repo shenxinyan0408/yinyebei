@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>分钟因子回测台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">本地回测工作台</p>
+          <h1>分钟因子回测台</h1>
+          <p class="hero-copy">
+            输入因子表达式，只用本地分钟数据做回测。
+          </p>
+        </div>
+        <div class="hero-note">
+          <span class="note-label">成交规则</span>
+          <strong>T+1 09:25 开盘价</strong>
+          <span class="note-sep"></span>
+          <span>前10%</span>
+          <span>等权</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel editor-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">因子编辑</p>
+              <h2>表达式</h2>
+            </div>
+            <button id="run-backtest" class="primary-button">开始回测</button>
+          </div>
+
+          <label class="field-label" for="expression">因子表达式</label>
+          <textarea id="expression" spellcheck="false">{{ default_expression }}</textarea>
+
+          <div class="input-grid">
+            <div class="input-card">
+              <label class="field-label" for="start-date">开始日期</label>
+              <input id="start-date" type="date" value="{{ default_start }}" />
+            </div>
+            <div class="input-card">
+              <label class="field-label" for="end-date">结束日期</label>
+              <input id="end-date" type="date" value="{{ default_end }}" />
+            </div>
+            <div class="input-card">
+              <label class="field-label" for="decay">衰减天数</label>
+              <input id="decay" type="number" min="1" value="1" />
+            </div>
+          </div>
+
+          <div class="fixed-rules">
+            <p class="section-kicker">固定规则</p>
+            <div id="fixed-rules-list" class="pill-row"></div>
+          </div>
+
+          <div class="examples-block">
+            <p class="section-kicker">示例</p>
+            <div id="example-buttons" class="example-buttons"></div>
+          </div>
+
+          <div class="status-card">
+            <div class="status-row">
+              <span class="section-kicker">状态</span>
+              <span id="status-text">等待输入。</span>
+            </div>
+            <div class="progress-shell">
+              <div id="progress-bar" class="progress-bar"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel results-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">回测结果</p>
+              <h2>表现概览</h2>
+            </div>
+            <div id="range-badge" class="range-badge">暂无结果</div>
+          </div>
+
+          <div id="summary-grid" class="summary-grid"></div>
+
+          <div class="chart-grid">
+            <div class="chart-card">
+              <div class="chart-head">
+                <h3>净值曲线</h3>
+                <span id="equity-caption"></span>
+              </div>
+              <div id="equity-chart" class="chart-surface empty-chart">运行一次回测后显示。</div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-head">
+                <h3>回撤曲线</h3>
+                <span id="drawdown-caption"></span>
+              </div>
+              <div id="drawdown-chart" class="chart-surface empty-chart">回撤结果会显示在这里。</div>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <div class="chart-head">
+              <h3>年度统计</h3>
+              <span>按开盘到开盘收益统计</span>
+            </div>
+            <div class="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>年份</th>
+                    <th>收益</th>
+                    <th>夏普</th>
+                    <th>最大回撤</th>
+                  </tr>
+                </thead>
+                <tbody id="yearly-table-body">
+                  <tr>
+                    <td colspan="4" class="placeholder-row">暂无年度统计。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="debug-card">
+            <div class="chart-head">
+              <h3>调试快照</h3>
+              <span>使用字段、覆盖率与有效区间</span>
+            </div>
+            <div id="debug-grid" class="debug-grid">
+              <div class="placeholder-row">结果调试信息会显示在这里。</div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <section class="panel catalog-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">查询 / 帮助</p>
+            <h2>原始字段、派生字段、函数</h2>
+          </div>
+          <div class="catalog-controls">
+            <input
+              id="catalog-search"
+              class="catalog-search"
+              type="search"
+              placeholder="搜索名称、说明、示例..."
+            />
+            <div class="filter-row">
+              <button class="filter-button active" data-filter="all">全部</button>
+              <button class="filter-button" data-filter="raw">原始字段</button>
+              <button class="filter-button" data-filter="derived">派生字段</button>
+              <button class="filter-button" data-filter="function">函数</button>
+            </div>
+          </div>
+        </div>
+        <div class="rules-help-block">
+          <div class="chart-head">
+            <h3>回测规则</h3>
+            <span>当前引擎假设与执行口径</span>
+          </div>
+          <div id="rules-help-list" class="rules-help-list"></div>
+        </div>
+        <div id="catalog-list" class="catalog-list"></div>
+      </section>
+    </div>
+
+    <script>
+      window.APP_DEFAULTS = {
+        startDate: "{{ default_start }}",
+        endDate: "{{ default_end }}",
+        defaultExpression: {{ default_expression | tojson }}
+      };
+    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+env/
+
+.DS_Store
+Thumbs.db
+
+~$*.docx
+~$*.xlsx
+
+# Large local datasets should stay outside the repository.
+股票分钟数据/
+股票分钟数据.zip
+DailyData20240102open.bin
