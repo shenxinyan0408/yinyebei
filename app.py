@@ -31,7 +31,8 @@ def create_app() -> Flask:
 
     data_dir = Path(os.environ.get("MINUTE_DATA_DIR", MINUTE_DATA_DIR))
     catalog_payload = build_catalog_payload()
-    executor = ThreadPoolExecutor(max_workers=1)
+    max_workers = max(1, int(os.environ.get("APP_MAX_WORKERS", "5")))
+    executor = ThreadPoolExecutor(max_workers=max_workers)
     jobs: dict[str, dict[str, Any]] = {}
     jobs_lock = threading.Lock()
     boot_error: str | None = None
@@ -58,6 +59,8 @@ def create_app() -> Flask:
             "defaultExpression": DEFAULT_EXPRESSION,
             "dataDirectory": str(data_dir),
             "bootError": boot_error,
+            "parallelLimitDefault": max_workers,
+            "parallelLimitMax": max_workers,
         }
 
     def set_job(job_id: str, **updates: Any) -> None:

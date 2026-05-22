@@ -13,15 +13,16 @@
           <p class="eyebrow">本地回测工作台</p>
           <h1>分钟因子回测台</h1>
           <p class="hero-copy">
-            输入因子表达式，只用本地分钟数据做回测。
+            直接在浏览器里同时管理多个因子窗口，使用本地分钟数据批量回测并对比结果。
           </p>
         </div>
         <div class="hero-note">
-          <span class="note-label">成交规则</span>
+          <span class="note-label">固定规则</span>
           <strong>T+1 09:25 开盘价</strong>
           <span class="note-sep"></span>
-          <span>前10%</span>
+          <span>前 10%</span>
           <span>等权</span>
+          <span>多头</span>
         </div>
       </header>
 
@@ -29,16 +30,17 @@
         <section class="panel editor-panel">
           <div class="panel-header">
             <div>
-              <p class="section-kicker">因子编辑</p>
-              <h2>表达式</h2>
+              <p class="section-kicker">多窗口回测</p>
+              <h2>因子窗口</h2>
+              <p id="window-count" class="panel-subtitle">0 个窗口</p>
             </div>
-            <button id="run-backtest" class="primary-button">开始回测</button>
+            <div class="panel-actions">
+              <button id="add-alpha" class="secondary-button" type="button">+ 添加窗口</button>
+              <button id="run-all-backtests" class="primary-button" type="button">回测全部</button>
+            </div>
           </div>
 
-          <label class="field-label" for="expression">因子表达式</label>
-          <textarea id="expression" spellcheck="false">{{ default_expression }}</textarea>
-
-          <div class="input-grid">
+          <div class="input-grid settings-grid">
             <div class="input-card">
               <label class="field-label" for="start-date">开始日期</label>
               <input id="start-date" type="date" value="{{ default_start }}" />
@@ -46,10 +48,6 @@
             <div class="input-card">
               <label class="field-label" for="end-date">结束日期</label>
               <input id="end-date" type="date" value="{{ default_end }}" />
-            </div>
-            <div class="input-card">
-              <label class="field-label" for="decay">衰减天数</label>
-              <input id="decay" type="number" min="1" value="1" />
             </div>
           </div>
 
@@ -59,17 +57,19 @@
           </div>
 
           <div class="examples-block">
-            <p class="section-kicker">示例</p>
+            <p class="section-kicker">示例表达式</p>
             <div id="example-buttons" class="example-buttons"></div>
           </div>
 
+          <div id="alpha-windows" class="alpha-windows"></div>
+
           <div class="status-card">
             <div class="status-row">
-              <span class="section-kicker">状态</span>
-              <span id="status-text">等待输入。</span>
+              <span class="section-kicker">批量状态</span>
+              <span id="batch-status-text">等待运行。</span>
             </div>
             <div class="progress-shell">
-              <div id="progress-bar" class="progress-bar"></div>
+              <div id="batch-progress-bar" class="progress-bar"></div>
             </div>
           </div>
         </section>
@@ -77,10 +77,14 @@
         <section class="panel results-panel">
           <div class="panel-header">
             <div>
-              <p class="section-kicker">回测结果</p>
-              <h2>表现概览</h2>
+              <p class="section-kicker">结果查看</p>
+              <h2 id="selected-alpha-name">请选择因子窗口</h2>
+              <p id="selected-alpha-expression" class="expression-preview">当前还没有选中的因子表达式。</p>
             </div>
-            <div id="range-badge" class="range-badge">暂无结果</div>
+            <div class="results-badges">
+              <div id="selected-alpha-status" class="range-badge">待运行</div>
+              <div id="range-badge" class="range-badge muted-badge">暂无结果</div>
+            </div>
           </div>
 
           <div id="summary-grid" class="summary-grid"></div>
@@ -129,7 +133,7 @@
           <div class="debug-card">
             <div class="chart-head">
               <h3>调试快照</h3>
-              <span>使用字段、覆盖率与有效区间</span>
+              <span>字段使用、覆盖率和有效区间</span>
             </div>
             <div id="debug-grid" class="debug-grid">
               <div class="placeholder-row">结果调试信息会显示在这里。</div>
@@ -152,10 +156,10 @@
               placeholder="搜索名称、说明、示例..."
             />
             <div class="filter-row">
-              <button class="filter-button active" data-filter="all">全部</button>
-              <button class="filter-button" data-filter="raw">原始字段</button>
-              <button class="filter-button" data-filter="derived">派生字段</button>
-              <button class="filter-button" data-filter="function">函数</button>
+              <button class="filter-button active" data-filter="all" type="button">全部</button>
+              <button class="filter-button" data-filter="raw" type="button">原始字段</button>
+              <button class="filter-button" data-filter="derived" type="button">派生字段</button>
+              <button class="filter-button" data-filter="function" type="button">函数</button>
             </div>
           </div>
         </div>
