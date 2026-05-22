@@ -99,6 +99,13 @@
               </div>
               <div id="drawdown-chart" class="chart-surface empty-chart">回撤结果会显示在这里。</div>
             </div>
+            <div class="chart-card full-width-chart">
+              <div class="chart-head">
+                <h3>IC 曲线</h3>
+                <span id="ic-caption"></span>
+              </div>
+              <div id="ic-chart" class="chart-surface empty-chart">IC 结果会显示在这里。</div>
+            </div>
           </div>
 
           <div class="table-card">
@@ -110,17 +117,19 @@
               <table>
                 <thead>
                   <tr>
-                    <th>年份</th>
-                    <th>收益</th>
-                    <th>夏普</th>
-                    <th>Turnover</th>
-                    <th>Margin</th>
-                    <th>最大回撤</th>
+                    <th>年份/Year</th>
+                    <th>收益/Return</th>
+                    <th>夏普/Sharpe</th>
+                    <th>换手率/Turnover</th>
+                    <th>收益换手比/Margin</th>
+                    <th>信息系数/IC</th>
+                    <th>信息比率/ICIR</th>
+                    <th>最大回撤/Max Drawdown</th>
                   </tr>
                 </thead>
                 <tbody id="yearly-table-body">
                   <tr>
-                    <td colspan="6" class="placeholder-row">暂无年度统计。</td>
+                    <td colspan="8" class="placeholder-row">暂无年度统计。</td>
                   </tr>
                 </tbody>
               </table>
@@ -138,6 +147,88 @@
           </div>
         </section>
       </main>
+
+      <section class="panel correlation-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">单独计算</p>
+            <h2>因子相关性</h2>
+            <p class="panel-subtitle">
+              选择两个已有因子窗口，按各自当前的表达式、日期和 Decay，在重叠日期区间里计算每日横截面相关性。
+            </p>
+          </div>
+          <div class="panel-actions">
+            <button id="run-correlation" class="primary-button" type="button">计算相关性</button>
+          </div>
+        </div>
+
+        <div class="correlation-controls">
+          <label class="alpha-field-control">
+            <span>因子 A/Factor A</span>
+            <select id="correlation-alpha-a"></select>
+          </label>
+          <label class="alpha-field-control">
+            <span>因子 B/Factor B</span>
+            <select id="correlation-alpha-b"></select>
+          </label>
+        </div>
+
+        <div class="status-card">
+          <div class="status-row">
+            <span class="section-kicker">计算状态</span>
+            <span id="correlation-status-text">等待计算。</span>
+          </div>
+          <div class="progress-shell">
+            <div id="correlation-progress-bar" class="progress-bar"></div>
+          </div>
+        </div>
+
+        <div id="correlation-summary-grid" class="summary-grid correlation-summary-grid"></div>
+
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3>相关性曲线</h3>
+            <span id="correlation-caption"></span>
+          </div>
+          <div id="correlation-chart" class="chart-surface empty-chart">相关性结果会显示在这里。</div>
+        </div>
+
+        <div class="table-card correlation-table-card">
+          <div class="chart-head">
+            <h3>年度相关性</h3>
+            <span>按重叠信号日统计</span>
+          </div>
+          <div class="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>年份/Year</th>
+                  <th>平均相关性/Average Correlation</th>
+                  <th>相关性标准差/Correlation Std</th>
+                  <th>相关性比率/Correlation Ratio</th>
+                  <th>平均样本数/Average Sample Count</th>
+                  <th>有效天数/Valid Days</th>
+                </tr>
+              </thead>
+              <tbody id="correlation-yearly-table-body">
+                <tr>
+                  <td colspan="6" class="placeholder-row">暂无相关性统计。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="debug-card">
+          <div class="chart-head">
+            <h3>相关性快照</h3>
+            <span>因子来源、重叠区间和有效样本</span>
+          </div>
+          <div id="correlation-debug-grid" class="debug-grid">
+            <div class="placeholder-row">相关性调试信息会显示在这里。</div>
+          </div>
+        </div>
+      </section>
 
       <section class="panel catalog-panel">
         <div class="panel-header">

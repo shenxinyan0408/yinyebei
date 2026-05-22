@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .catalog import DEFAULT_EXPRESSION, FIXED_RULES
+from .daily_data import DailyLabelStore
 from .data import MinuteDataStore
 from .expression import ExpressionEngine, ExpressionError
 
@@ -28,9 +29,15 @@ class BacktestInputs:
 
 
 class BacktestEngine:
-    def __init__(self, data_store: MinuteDataStore, expression_engine: ExpressionEngine):
+    def __init__(
+        self,
+        data_store: MinuteDataStore,
+        expression_engine: ExpressionEngine,
+        label_store: DailyLabelStore,
+    ):
         self.data_store = data_store
         self.expression_engine = expression_engine
+        self.label_store = label_store
 
     def run(
         self,
@@ -114,6 +121,11 @@ class BacktestEngine:
         )
         coverage_df = pd.DataFrame(coverage_rows).set_index("date")
         open_df = pd.DataFrame.from_dict(open_series, orient="index", dtype=np.float64).sort_index()
+        label_df = self.label_store.load_label_frame(unique_signal_dates, signal_df.columns.tolist())
+        ic_df = self._compute_ic_series(
+            decayed_df.reindex(unique_signal_dates),
+            label_df.reindex(unique_signal_dates),
+        )
 
         weights_by_trade_date: dict[str, pd.Series] = {}
         turnover_rows: list[float] = []
@@ -207,10 +219,11 @@ class BacktestEngine:
         summary = self._build_summary(
             returns_df,
             coverage_df.reindex(unique_signal_dates)["coverage"].dropna(),
+            ic_df["ic"].dropna(),
             selected_counts,
             candidate_counts,
         )
-        yearly_stats = self._build_yearly_stats(returns_df)
+        yearly_stats = self._build_yearly_stats(returns_df, ic_df)
 
         progress(1.0, "Backtest complete.")
         return {
@@ -222,6 +235,10 @@ class BacktestEngine:
             "drawdownCurve": [
                 {"date": row.date, "value": round(float(row.drawdown), 8)}
                 for row in returns_df.itertuples()
+            ],
+            "icCurve": [
+                {"date": row.Index, "value": round(float(row.ic), 8)}
+                for row in ic_df.dropna(subset=["ic"]).itertuples()
             ],
             "yearlyStats": yearly_stats,
             "debug": {
@@ -238,6 +255,8 @@ class BacktestEngine:
                 },
                 "effectiveReturnDays": int(returns_df.shape[0]),
                 "averageSignalCoverage": summary["coverage"],
+                "averageIC": summary["ic"],
+                "icir": summary["icir"],
                 "averageCandidateCount": round(float(np.mean(candidate_counts or [0])), 2),
                 "averageSelectedCount": round(float(np.mean(selected_counts or [0])), 2),
             },
@@ -283,10 +302,39 @@ class BacktestEngine:
 
         return pd.DataFrame.from_dict(decayed_rows, orient="index", dtype=np.float64).sort_index()
 
+    def _compute_ic_series(
+        self,
+        signal_df: pd.DataFrame,
+        label_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        rows: list[dict[str, Any]] = []
+        for date in signal_df.index.intersection(label_df.index):
+            signal_row = signal_df.loc[date].to_numpy(dtype=np.float64, copy=False)
+            label_row = label_df.loc[date].to_numpy(dtype=np.float64, copy=False)
+            ic_value = self._cross_sectional_ic(signal_row, label_row)
+            rows.append({"date": date, "ic": ic_value})
+
+        if not rows:
+            return pd.DataFrame(columns=["ic"], dtype=np.float64)
+
+        return pd.DataFrame(rows).set_index("date").sort_index()
+
+    def _cross_sectional_ic(self, signal_row: np.ndarray, label_row: np.ndarray) -> float:
+        valid = np.isfinite(signal_row) & np.isfinite(label_row)
+        if int(valid.sum()) < 2:
+            return float("nan")
+
+        x = signal_row[valid]
+        y = label_row[valid]
+        if np.std(x) == 0 or np.std(y) == 0:
+            return float("nan")
+        return float(np.corrcoef(x, y)[0, 1])
+
     def _build_summary(
         self,
         returns_df: pd.DataFrame,
         coverage_series: pd.Series,
+        ic_series: pd.Series,
         selected_counts: list[int],
         candidate_counts: list[int],
     ) -> dict[str, float]:
@@ -301,6 +349,9 @@ class BacktestEngine:
         margin = float(daily_returns.mean() / avg_turnover * 10000.0) if avg_turnover > 0 else 0.0
         avg_holdings = float(np.mean(selected_counts or [0]))
         coverage = float(coverage_series.mean()) if not coverage_series.empty else 0.0
+        avg_ic = float(ic_series.mean()) if not ic_series.empty else 0.0
+        ic_std = float(ic_series.std(ddof=0)) if len(ic_series) else 0.0
+        icir = float(avg_ic / ic_std) if ic_std > 0 else 0.0
         return {
             "totalReturn": round(total_return, 6),
             "annualizedReturn": round(annualized_return, 6),
@@ -309,17 +360,35 @@ class BacktestEngine:
             "turnover": round(avg_turnover, 6),
             "averageTurnover": round(avg_turnover, 6),
             "margin": round(margin, 6),
+            "ic": round(avg_ic, 6),
+            "icir": round(icir, 6),
             "averageHoldings": round(avg_holdings, 2),
             "coverage": round(coverage, 6),
             "averageCandidateCount": round(float(np.mean(candidate_counts or [0])), 2),
         }
 
-    def _build_yearly_stats(self, returns_df: pd.DataFrame) -> list[dict[str, Any]]:
+    def _build_yearly_stats(
+        self,
+        returns_df: pd.DataFrame,
+        ic_df: pd.DataFrame,
+    ) -> list[dict[str, Any]]:
         if returns_df.empty:
             return []
 
         frame = returns_df.copy()
         frame["year"] = frame["date"].str.slice(0, 4)
+        yearly_ic: dict[str, dict[str, float]] = {}
+        if not ic_df.empty:
+            ic_frame = ic_df.reset_index().rename(columns={"date": "signalDate"})
+            ic_frame["year"] = ic_frame["signalDate"].str.slice(0, 4)
+            for year, group in ic_frame.groupby("year"):
+                ic_mean = float(group["ic"].mean()) if not group.empty else 0.0
+                ic_std = float(group["ic"].std(ddof=0)) if len(group) else 0.0
+                yearly_ic[str(year)] = {
+                    "ic": round(ic_mean, 6),
+                    "icir": round(float(ic_mean / ic_std) if ic_std > 0 else 0.0, 6),
+                }
+
         output: list[dict[str, Any]] = []
         for year, group in frame.groupby("year"):
             equity = (1.0 + group["return"]).cumprod()
@@ -343,6 +412,8 @@ class BacktestEngine:
                     "sharpe": round(sharpe, 6),
                     "turnover": round(avg_turnover, 6),
                     "margin": round(margin, 6),
+                    "ic": yearly_ic.get(str(year), {}).get("ic", 0.0),
+                    "icir": yearly_ic.get(str(year), {}).get("icir", 0.0),
                     "maxDrawdown": round(float(drawdown.min()), 6),
                 }
             )

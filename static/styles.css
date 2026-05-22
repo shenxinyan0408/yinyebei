@@ -201,7 +201,8 @@ body {
 textarea,
 input[type="date"],
 input[type="number"],
-input[type="search"] {
+input[type="search"],
+select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -220,7 +221,8 @@ textarea {
 
 input[type="date"],
 input[type="number"],
-input[type="search"] {
+input[type="search"],
+select {
   padding: 12px 14px;
   font-size: 0.95rem;
 }
@@ -543,6 +545,10 @@ input[type="search"] {
   padding: 16px;
 }
 
+.full-width-chart {
+  grid-column: 1 / -1;
+}
+
 .chart-head {
   align-items: baseline;
   margin-bottom: 12px;
@@ -605,6 +611,25 @@ th {
 }
 
 .catalog-panel {
+  margin-top: 18px;
+}
+
+.correlation-panel {
+  margin-top: 18px;
+  padding: 22px;
+}
+
+.correlation-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.correlation-summary-grid {
+  margin-top: 18px;
+}
+
+.correlation-table-card {
   margin-top: 18px;
 }
 
@@ -724,6 +749,7 @@ th {
 
   .summary-grid,
   .chart-grid,
+  .correlation-controls,
   .rules-help-list,
   .catalog-list {
     grid-template-columns: 1fr;
@@ -746,6 +772,7 @@ th {
 
   .editor-panel,
   .results-panel,
+  .correlation-panel,
   .catalog-panel {
     padding: 18px;
   }

@@ -12,12 +12,16 @@ from flask import Flask, jsonify, render_template, request
 from engine import (
     BacktestEngine,
     BacktestError,
+    CorrelationEngine,
+    CorrelationError,
+    DailyLabelStore,
     ExpressionEngine,
     ExpressionError,
     MinuteDataStore,
     build_catalog_payload,
 )
 from engine.catalog import (
+    DAILY_DATA_FILE,
     DEFAULT_EXPRESSION,
     EXAMPLE_EXPRESSIONS,
     FIXED_RULES,
@@ -30,6 +34,7 @@ def create_app() -> Flask:
     app.json.ensure_ascii = False
 
     data_dir = Path(os.environ.get("MINUTE_DATA_DIR", MINUTE_DATA_DIR))
+    daily_data_file = Path(os.environ.get("DAILY_DATA_FILE", DAILY_DATA_FILE))
     catalog_payload = build_catalog_payload()
     max_workers = max(1, int(os.environ.get("APP_MAX_WORKERS", "5")))
     executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -38,11 +43,14 @@ def create_app() -> Flask:
     boot_error: str | None = None
     data_store: MinuteDataStore | None = None
     backtest_engine: BacktestEngine | None = None
+    correlation_engine: CorrelationEngine | None = None
 
     try:
         data_store = MinuteDataStore(data_dir=data_dir)
+        label_store = DailyLabelStore(daily_data_file)
         expression_engine = ExpressionEngine()
-        backtest_engine = BacktestEngine(data_store, expression_engine)
+        backtest_engine = BacktestEngine(data_store, expression_engine, label_store)
+        correlation_engine = CorrelationEngine(data_store, expression_engine)
     except Exception as exc:
         boot_error = f"数据初始化失败：{exc}"
 
@@ -58,6 +66,7 @@ def create_app() -> Flask:
             "exampleExpressions": EXAMPLE_EXPRESSIONS,
             "defaultExpression": DEFAULT_EXPRESSION,
             "dataDirectory": str(data_dir),
+            "dailyDataFile": str(daily_data_file),
             "bootError": boot_error,
             "parallelLimitDefault": max_workers,
             "parallelLimitMax": max_workers,
@@ -114,6 +123,58 @@ def create_app() -> Flask:
             result=result,
         )
 
+    def run_correlation_job(job_id: str, payload: dict[str, Any]) -> None:
+        def on_progress(progress_value: float, message: str) -> None:
+            set_job(
+                job_id,
+                status="running",
+                progress=max(0.0, min(1.0, progress_value)),
+                message=message,
+            )
+
+        try:
+            if correlation_engine is None:
+                raise CorrelationError(boot_error or "Correlation engine is not ready.")
+            factor_a = payload.get("factorA", {}) or {}
+            factor_b = payload.get("factorB", {}) or {}
+            result = correlation_engine.run(
+                expression_a=str(factor_a.get("expression", "")),
+                start_date_a=str(factor_a.get("startDate", "")),
+                end_date_a=str(factor_a.get("endDate", "")),
+                decay_a=int(factor_a.get("decay", 1)),
+                expression_b=str(factor_b.get("expression", "")),
+                start_date_b=str(factor_b.get("startDate", "")),
+                end_date_b=str(factor_b.get("endDate", "")),
+                decay_b=int(factor_b.get("decay", 1)),
+                progress=on_progress,
+            )
+        except (CorrelationError, ExpressionError) as exc:
+            set_job(
+                job_id,
+                status="failed",
+                progress=1.0,
+                message=str(exc),
+                errorType=exc.__class__.__name__,
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive path
+            set_job(
+                job_id,
+                status="failed",
+                progress=1.0,
+                message=f"Server error: {exc}",
+                errorType="ServerError",
+            )
+            return
+
+        set_job(
+            job_id,
+            status="succeeded",
+            progress=1.0,
+            message="Factor correlation finished.",
+            result=result,
+        )
+
     @app.get("/")
     def index() -> str:
         meta = base_meta()
@@ -154,6 +215,30 @@ def create_app() -> Flask:
             job = jobs.get(job_id)
         if job is None:
             return jsonify({"message": "未找到对应任务。"}), 404
+        return jsonify(job)
+
+    @app.post("/api/correlations")
+    def create_correlation() -> Any:
+        if correlation_engine is None:
+            return jsonify({"message": boot_error or "Correlation engine is not ready."}), 503
+        payload = request.get_json(silent=True) or {}
+        job_id = uuid.uuid4().hex
+        set_job(
+            job_id,
+            id=job_id,
+            status="queued",
+            progress=0.0,
+            message="Correlation request added to queue.",
+        )
+        executor.submit(run_correlation_job, job_id, payload)
+        return jsonify({"jobId": job_id, "status": "queued"}), 202
+
+    @app.get("/api/correlations/<job_id>")
+    def get_correlation(job_id: str) -> Any:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if job is None:
+            return jsonify({"message": "Task not found."}), 404
         return jsonify(job)
 
     return app

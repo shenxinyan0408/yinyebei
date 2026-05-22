@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 BASE_DIR = Path(__file__).resolve().parent.parent
 RAW_FIELD_DOC_PATH = BASE_DIR / "股票分钟数据说明.xlsx"
 MINUTE_DATA_DIR = BASE_DIR / "股票分钟数据"
+DAILY_DATA_FILE = BASE_DIR / "DailyData20240102open.bin"
 DEFAULT_EXPRESSION = "rank(last(MINUTE_CLOSE) / first(MINUTE_OPEN) - 1)"
 PRICE_FIELDS = {
     "MINUTE_OPEN",
@@ -358,9 +359,39 @@ def load_raw_field_catalog() -> list[dict[str, str]]:
     return rows
 
 
+def build_backtest_rules() -> list[dict[str, Any]]:
+    rules = [
+        {
+            "title": section["title"],
+            "items": list(section["items"]),
+        }
+        for section in BACKTEST_RULES
+    ]
+    if rules:
+        rules[-1] = {
+            "title": "范围限制",
+            "items": [
+                "分钟信号与开盘成交价格来自本地分钟数据目录中的 .mat 文件。",
+                "IC 标签来自 DailyData20240102open.bin 中的 Label 字段。",
+                "不考虑手续费，不考虑滑点，不做空，不做中性化，不做日内多次调仓。",
+            ],
+        }
+    rules.append(
+        {
+            "title": "标签与 IC",
+            "items": [
+                "Label 表示未来 5 日收益，并且已经剥离风险因子后的剩余收益。",
+                "某个信号日的标签从下一交易日上午开始计算，例如 2009-01-05 这一行对应 2009-01-06 上午到 2009-01-13 上午。",
+                "IC 按信号日横截面计算，使用当日衰减后的因子分数与同一日的 Label 做相关系数。",
+            ],
+        }
+    )
+    return rules
+
+
 def build_catalog_payload() -> dict[str, Any]:
     return {
-        "backtestRules": BACKTEST_RULES,
+        "backtestRules": build_backtest_rules(),
         "rawFields": load_raw_field_catalog(),
         "derivedFields": DERIVED_FIELDS,
         "functions": FUNCTIONS,

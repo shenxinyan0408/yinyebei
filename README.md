@@ -1,22 +1,32 @@
-# 分钟因子回测台
+# 分钟因子回测网页
 
-本地分钟数据回测网页。输入因子表达式和 `Decay`，在浏览器里直接运行回测并查看结果。
+本地回测网页。可以同时管理多个因子窗口，在浏览器里输入表达式、单独设置每个因子的开始日期、结束日期和 `Decay`，然后查看回测结果。
 
-## 仓库使用建议
+另外还提供一个独立的“因子相关性”计算区，可以选择两个已有因子窗口，按各自当前的表达式与设置，在重叠日期区间里计算每日横截面相关性。
 
-- 代码适合放到 GitHub。
-- 大数据文件不适合直接提交到 GitHub，尤其是 `股票分钟数据/`、`股票分钟数据.zip`、`DailyData20240102open.bin`。
-- 建议仓库只保存代码和说明，分钟数据放在本地目录，再通过环境变量指定。
+## 准备数据
 
-## 快速开始
+默认会读取项目根目录下的：
 
-1. 创建虚拟环境。
+- `股票分钟数据/`
+- `股票分钟数据说明.xlsx`
+- `DailyData20240102open.bin`
+
+其中：
+
+- 分钟 `.mat` 数据用于信号计算和开盘成交价回测。
+- `DailyData20240102open.bin` 中的 `Label` 用于计算因子与标签的 `IC` / `ICIR`。
+
+大数据文件不建议直接提交到 GitHub。更适合把仓库只作为代码仓库，数据单独放在本地磁盘，再通过环境变量指定路径。
+
+## 安装
 
 Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
 Linux / macOS:
@@ -24,27 +34,30 @@ Linux / macOS:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-2. 安装依赖：
-
-```bash
 python -m pip install -r requirements.txt
 ```
 
-3. 准备数据。
+## 运行
 
-默认情况下，程序会读取项目根目录下的：
+默认启动：
 
-- `股票分钟数据/`
-- `股票分钟数据说明.xlsx`
+```bash
+python app.py
+```
 
-如果分钟数据不在项目根目录，可以设置 `MINUTE_DATA_DIR`。
+浏览器打开：
+
+```text
+http://127.0.0.1:5000
+```
+
+如果数据不在项目根目录，可以设置环境变量。
 
 Windows PowerShell:
 
 ```powershell
 $env:MINUTE_DATA_DIR="D:\your\minute\data\folder"
+$env:DAILY_DATA_FILE="D:\your\daily\DailyData20240102open.bin"
 python app.py
 ```
 
@@ -52,37 +65,11 @@ Linux / macOS:
 
 ```bash
 export MINUTE_DATA_DIR="/path/to/your/minute/data/folder"
+export DAILY_DATA_FILE="/path/to/your/daily/DailyData20240102open.bin"
 python app.py
 ```
 
-如果说明文件 `股票分钟数据说明.xlsx` 也不在仓库根目录，请把它一起放到项目根目录。
-
-4. 启动服务：
-
-```bash
-python app.py
-```
-
-5. 打开浏览器：
-
-```text
-http://127.0.0.1:5000
-```
-
-## 可选环境变量
-
-- `MINUTE_DATA_DIR`: 分钟数据目录。
-- `APP_HOST`: 服务监听地址，默认 `127.0.0.1`。
-- `APP_PORT`: 服务端口，默认 `5000`。
-- `APP_MAX_WORKERS`: 后端同时执行的最大回测任务数，默认 `5`。
-
-示例：
-
-```bash
-APP_HOST=0.0.0.0 APP_PORT=5000 python app.py
-```
-
-Linux / macOS 如果上面这种单行写法不方便，也可以：
+如果还想改监听地址或端口：
 
 ```bash
 export APP_HOST=0.0.0.0
@@ -90,17 +77,26 @@ export APP_PORT=5000
 python app.py
 ```
 
-## 目录结构
+上面这种 `export` 方式只对当前终端会话生效，不是永久修改。
+
+## 环境变量
+
+- `MINUTE_DATA_DIR`: 分钟数据目录。
+- `DAILY_DATA_FILE`: 日频标签文件路径。
+- `APP_HOST`: 服务监听地址，默认 `127.0.0.1`。
+- `APP_PORT`: 服务端口，默认 `5000`。
+- `APP_MAX_WORKERS`: 后端同时执行的最大回测任务数，默认 `5`。
+
+## 项目结构
 
 - `app.py`: Flask 入口和 API。
 - `engine/`: 数据读取、表达式解析、回测计算、字段目录。
-- `templates/`、`static/`: 网页模板、样式和前端逻辑。
+- `templates/`、`static/`: 页面模板、样式和前端逻辑。
 
 ## 说明
 
-- 当前版本只使用分钟 `.mat` 数据，不读取 `DailyData20240102open.bin`。
-- 支持同时添加多个因子窗口；每个窗口的 `Decay`、开始日期、结束日期都可以单独设置。
+- 因子数量本身不受限制，但后端并行回测数量受 `APP_MAX_WORKERS` 限制。
 - 网页里不提供并发数量修改入口；如果需要调整最大同时回测数，请只在服务端通过 `APP_MAX_WORKERS` 修改。
 - 字段、派生字段、函数说明，以及完整回测规则，都可以直接在网页帮助区查看。
-- 长时间区间首次运行会比较慢，因为后端需要逐日读取分钟数据文件。
-- 如果缺少本地数据，网页会给出明确的初始化错误提示，而不是直接崩掉。
+- 长区间首次运行会比较慢，因为后端需要逐日读取分钟数据文件。
+- 如果缺少本地数据，网页会显示明确的初始化错误提示。
