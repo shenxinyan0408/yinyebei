@@ -57,14 +57,22 @@ function formatNumber(value, digits = 2) {
   return Number(value || 0).toFixed(digits);
 }
 
+function formatBps(value) {
+  return `${formatNumber(value, 2)} bps`;
+}
+
 function formatSummaryValue(key, value) {
   const percentKeys = new Set([
     "totalReturn",
     "annualizedReturn",
     "maxDrawdown",
     "averageTurnover",
+    "turnover",
     "coverage",
   ]);
+  if (key === "margin") {
+    return formatBps(value);
+  }
   if (percentKeys.has(key)) {
     return formatPercent(value);
   }
@@ -406,6 +414,8 @@ function buildAlphaSummary(alpha) {
     <div class="alpha-metric">Decay ${alpha.decay}</div>
     <div class="alpha-metric">总收益 ${formatPercent(alpha.result.summary.totalReturn)}</div>
     <div class="alpha-metric">夏普 ${formatNumber(alpha.result.summary.sharpe, 2)}</div>
+    <div class="alpha-metric">Turnover ${formatPercent(alpha.result.summary.turnover)}</div>
+    <div class="alpha-metric">Margin ${formatBps(alpha.result.summary.margin)}</div>
     <div class="alpha-metric">最大回撤 ${formatPercent(alpha.result.summary.maxDrawdown)}</div>
   `;
 }
@@ -599,8 +609,9 @@ function renderSummary(summary) {
     ["totalReturn", "总收益", "累计开盘到开盘收益"],
     ["annualizedReturn", "年化收益", "按 252 个交易日年化"],
     ["sharpe", "夏普", "基于日度实现收益计算"],
+    ["turnover", "Turnover", "平均每个收益日的换手率"],
+    ["margin", "Margin", "平均每日收益除以平均换手，单位 bps"],
     ["maxDrawdown", "最大回撤", "从峰值到谷值的回撤"],
-    ["averageTurnover", "平均换手", "平均每个收益日的换手率"],
     ["averageHoldings", "平均持仓数", "平均入选股票数量"],
     ["coverage", "平均覆盖率", "衰减后的有效分数覆盖率"],
     ["averageCandidateCount", "平均候选数", "筛选前可交易股票数量"],
@@ -625,7 +636,7 @@ function renderSummaryPlaceholder(message) {
 function renderYearlyStats(rows) {
   if (!rows || !rows.length) {
     nodes.yearlyTableBody.innerHTML =
-      '<tr><td colspan="4" class="placeholder-row">暂无年度统计。</td></tr>';
+      '<tr><td colspan="6" class="placeholder-row">暂无年度统计。</td></tr>';
     return;
   }
   nodes.yearlyTableBody.innerHTML = rows
@@ -635,6 +646,8 @@ function renderYearlyStats(rows) {
           <td>${escapeHtml(row.year)}</td>
           <td>${formatPercent(row.return)}</td>
           <td>${formatNumber(row.sharpe, 2)}</td>
+          <td>${formatPercent(row.turnover)}</td>
+          <td>${formatBps(row.margin)}</td>
           <td>${formatPercent(row.maxDrawdown)}</td>
         </tr>
       `
@@ -774,7 +787,7 @@ function renderSelectedAlphaResult() {
   }
 
   if (alpha.status === "failed") {
-    nodes.rangeBadge.textContent = "运行失败";
+    nodes.rangeBadge.textContent = "暂无结果";
     renderSummaryPlaceholder(alpha.message || "本次回测失败。");
     renderYearlyStats([]);
     renderDebugPlaceholder(alpha.message || "错误信息会显示在这里。");
@@ -785,12 +798,10 @@ function renderSelectedAlphaResult() {
     return;
   }
 
-  nodes.rangeBadge.textContent = alpha.status === "running" || alpha.status === "queued"
-    ? alpha.message
-    : "暂无结果";
-  renderSummaryPlaceholder(alpha.message || "运行一次回测后显示。");
+  nodes.rangeBadge.textContent = "暂无结果";
+  renderSummaryPlaceholder("当前因子尚未生成回测结果。");
   renderYearlyStats([]);
-  renderDebugPlaceholder(alpha.message || "结果调试信息会显示在这里。");
+  renderDebugPlaceholder("回测完成后会显示字段使用、覆盖率和有效区间。");
   nodes.equityCaption.textContent = "";
   nodes.drawdownCaption.textContent = "";
   setEmptyChart(nodes.equityChart, "运行一次回测后显示。");
@@ -822,7 +833,7 @@ function collectRunnableAlphaIds(alphaIds) {
   return runnable;
 }
 
-function currentPayload(alpha, settings) {
+function currentPayload(alpha) {
   return {
     expression: alpha.expression.trim(),
     startDate: alpha.startDate,

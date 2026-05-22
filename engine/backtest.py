@@ -298,6 +298,7 @@ class BacktestEngine:
         sharpe = float(np.sqrt(252.0) * daily_returns.mean() / volatility) if volatility > 0 else 0.0
         max_drawdown = float(returns_df["drawdown"].min())
         avg_turnover = float(returns_df["turnover"].mean()) if not returns_df.empty else 0.0
+        margin = float(daily_returns.mean() / avg_turnover * 10000.0) if avg_turnover > 0 else 0.0
         avg_holdings = float(np.mean(selected_counts or [0]))
         coverage = float(coverage_series.mean()) if not coverage_series.empty else 0.0
         return {
@@ -305,7 +306,9 @@ class BacktestEngine:
             "annualizedReturn": round(annualized_return, 6),
             "sharpe": round(sharpe, 6),
             "maxDrawdown": round(max_drawdown, 6),
+            "turnover": round(avg_turnover, 6),
             "averageTurnover": round(avg_turnover, 6),
+            "margin": round(margin, 6),
             "averageHoldings": round(avg_holdings, 2),
             "coverage": round(coverage, 6),
             "averageCandidateCount": round(float(np.mean(candidate_counts or [0])), 2),
@@ -322,6 +325,12 @@ class BacktestEngine:
             equity = (1.0 + group["return"]).cumprod()
             drawdown = equity / equity.cummax() - 1.0
             volatility = float(group["return"].std(ddof=0))
+            avg_turnover = float(group["turnover"].mean()) if not group.empty else 0.0
+            margin = (
+                float(group["return"].mean() / avg_turnover * 10000.0)
+                if avg_turnover > 0
+                else 0.0
+            )
             sharpe = (
                 float(np.sqrt(252.0) * group["return"].mean() / volatility)
                 if volatility > 0
@@ -332,6 +341,8 @@ class BacktestEngine:
                     "year": year,
                     "return": round(float(equity.iloc[-1] - 1.0), 6),
                     "sharpe": round(sharpe, 6),
+                    "turnover": round(avg_turnover, 6),
+                    "margin": round(margin, 6),
                     "maxDrawdown": round(float(drawdown.min()), 6),
                 }
             )
