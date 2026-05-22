@@ -10,12 +10,11 @@ const state = {
 };
 
 const nodes = {
-  startDate: document.getElementById("start-date"),
-  endDate: document.getElementById("end-date"),
   addAlphaButton: document.getElementById("add-alpha"),
   runAllButton: document.getElementById("run-all-backtests"),
   windowCount: document.getElementById("window-count"),
-  alphaWindows: document.getElementById("alpha-windows"),
+  alphaTabList: document.getElementById("alpha-tab-list"),
+  alphaEditorShell: document.getElementById("alpha-editor-shell"),
   batchStatusText: document.getElementById("batch-status-text"),
   batchProgressBar: document.getElementById("batch-progress-bar"),
   fixedRulesList: document.getElementById("fixed-rules-list"),
@@ -130,11 +129,29 @@ function sanitizeDecayValue(value) {
   return Math.max(1, Math.round(raw));
 }
 
+function defaultStartDate() {
+  return state.meta?.dateRange?.start || window.APP_DEFAULTS.startDate || "";
+}
+
+function defaultEndDate() {
+  return state.meta?.dateRange?.end || window.APP_DEFAULTS.endDate || "";
+}
+
+function sanitizeAlphaDate(value, fallback) {
+  const next = String(value || "").trim();
+  if (!next) {
+    return fallback;
+  }
+  return next;
+}
+
 function createAlphaWindow(expression = "", options = {}) {
   const alpha = {
     id: generateAlphaId(),
     title: `因子 ${state.nextAlphaNumber}`,
     expression,
+    startDate: sanitizeAlphaDate(options.startDate, defaultStartDate()),
+    endDate: sanitizeAlphaDate(options.endDate, defaultEndDate()),
     decay: sanitizeDecayValue(options.decay ?? 1),
     status: "idle",
     progress: 0,
@@ -187,11 +204,23 @@ function setAlphaExpression(alphaId, expression) {
 function setAlphaDecay(alphaId, decay) {
   const alpha = findAlpha(alphaId);
   if (!alpha) {
-    return;
+    return 1;
   }
   alpha.decay = sanitizeDecayValue(decay);
-  renderAlphaWindows();
-  renderSelectedAlphaResult();
+  return alpha.decay;
+}
+
+function setAlphaDate(alphaId, key, value) {
+  const alpha = findAlpha(alphaId);
+  if (!alpha) {
+    return "";
+  }
+  if (key !== "startDate" && key !== "endDate") {
+    return "";
+  }
+  const fallback = key === "startDate" ? defaultStartDate() : defaultEndDate();
+  alpha[key] = sanitizeAlphaDate(value, fallback);
+  return alpha[key];
 }
 
 function prepareAlphaForRun(alphaId) {
@@ -367,9 +396,13 @@ function renderCatalog() {
 
 function buildAlphaSummary(alpha) {
   if (!alpha.result?.summary) {
-    return `<div class="alpha-metric">Decay ${alpha.decay}</div>`;
+    return `
+      <div class="alpha-metric">${alpha.startDate} -> ${alpha.endDate}</div>
+      <div class="alpha-metric">Decay ${alpha.decay}</div>
+    `;
   }
   return `
+    <div class="alpha-metric">${alpha.startDate} -> ${alpha.endDate}</div>
     <div class="alpha-metric">Decay ${alpha.decay}</div>
     <div class="alpha-metric">总收益 ${formatPercent(alpha.result.summary.totalReturn)}</div>
     <div class="alpha-metric">夏普 ${formatNumber(alpha.result.summary.sharpe, 2)}</div>
@@ -380,128 +413,185 @@ function buildAlphaSummary(alpha) {
 function renderAlphaWindows() {
   const batchActive = isBatchActive();
   const bootError = Boolean(state.meta?.bootError);
+  const selectedAlpha = getSelectedAlpha();
   nodes.windowCount.textContent = `${state.alphas.length} 个窗口`;
-  nodes.alphaWindows.innerHTML = "";
+  nodes.alphaTabList.innerHTML = "";
+  nodes.alphaEditorShell.innerHTML = "";
   nodes.addAlphaButton.disabled = bootError || batchActive;
   nodes.runAllButton.disabled = bootError || batchActive;
-  nodes.startDate.disabled = bootError || batchActive;
-  nodes.endDate.disabled = bootError || batchActive;
 
   state.alphas.forEach((alpha) => {
-    const card = document.createElement("article");
-    card.className = `alpha-card ${alpha.id === state.selectedAlphaId ? "active" : ""}`;
-    card.addEventListener("click", () => selectAlpha(alpha.id));
-
-    const header = document.createElement("div");
-    header.className = "alpha-card-header";
-
-    const heading = document.createElement("div");
-    const title = document.createElement("h3");
-    title.textContent = alpha.title;
-    const subtitle = document.createElement("span");
-    subtitle.className = `alpha-status status-${alpha.status}`;
-    subtitle.textContent = alphaStatusLabel(alpha.status);
-    heading.appendChild(title);
-    heading.appendChild(subtitle);
-
-    const actions = document.createElement("div");
-    actions.className = "alpha-actions";
-
-    const runButton = document.createElement("button");
-    runButton.type = "button";
-    runButton.className = "ghost-button";
-    runButton.textContent = "仅运行此窗";
-    runButton.disabled = bootError || batchActive;
-    runButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      runAlphaSet([alpha.id]);
-    });
-
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "ghost-button danger-button";
-    removeButton.textContent = "删除";
-    removeButton.disabled = bootError || batchActive || state.alphas.length <= 1;
-    removeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      removeAlphaWindow(alpha.id);
-    });
-
-    actions.appendChild(runButton);
-    actions.appendChild(removeButton);
-    header.appendChild(heading);
-    header.appendChild(actions);
-
-    const textarea = document.createElement("textarea");
-    textarea.className = "alpha-textarea";
-    textarea.placeholder = "在这里输入因子表达式。空窗口不会加入本轮回测。";
-    textarea.value = alpha.expression;
-    textarea.disabled = batchActive || alpha.status === "queued" || alpha.status === "running";
-    textarea.addEventListener("input", (event) => {
-      setAlphaExpression(alpha.id, event.target.value);
-    });
-    textarea.addEventListener("click", (event) => {
-      event.stopPropagation();
-    });
-
-    const controls = document.createElement("div");
-    controls.className = "alpha-control-row";
-
-    const decayWrap = document.createElement("label");
-    decayWrap.className = "alpha-decay-control";
-    decayWrap.innerHTML = '<span>Decay</span>';
-
-    const decayInput = document.createElement("input");
-    decayInput.type = "number";
-    decayInput.min = "1";
-    decayInput.step = "1";
-    decayInput.value = String(alpha.decay);
-    decayInput.disabled = batchActive || alpha.status === "queued" || alpha.status === "running";
-    decayInput.addEventListener("click", (event) => {
-      event.stopPropagation();
-    });
-    decayInput.addEventListener("input", (event) => {
-      const nextValue = Number(event.target.value);
-      alpha.decay = Number.isFinite(nextValue) && nextValue >= 1 ? nextValue : alpha.decay;
-    });
-    decayInput.addEventListener("change", (event) => {
-      event.stopPropagation();
-      setAlphaDecay(alpha.id, event.target.value);
-    });
-    decayInput.addEventListener("blur", (event) => {
-      setAlphaDecay(alpha.id, event.target.value);
-    });
-    decayWrap.appendChild(decayInput);
-    controls.appendChild(decayWrap);
-
-    const footer = document.createElement("div");
-    footer.className = "alpha-card-footer";
-
-    const message = document.createElement("div");
-    message.className = "alpha-message";
-    message.textContent = alpha.message;
-
-    const progressShell = document.createElement("div");
-    progressShell.className = "mini-progress-shell";
-    const progressBar = document.createElement("div");
-    progressBar.className = "mini-progress-bar";
-    progressBar.style.width = `${clamp(alpha.progress, 0, 1) * 100}%`;
-    progressShell.appendChild(progressBar);
-
-    const summary = document.createElement("div");
-    summary.className = "alpha-summary-row";
-    summary.innerHTML = buildAlphaSummary(alpha);
-
-    footer.appendChild(message);
-    footer.appendChild(progressShell);
-    footer.appendChild(summary);
-
-    card.appendChild(header);
-    card.appendChild(textarea);
-    card.appendChild(controls);
-    card.appendChild(footer);
-    nodes.alphaWindows.appendChild(card);
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = `alpha-tab alpha-tab-${alpha.status} ${alpha.id === state.selectedAlphaId ? "active" : ""}`;
+    tab.addEventListener("click", () => selectAlpha(alpha.id));
+    tab.textContent = alpha.title;
+    tab.title = `${alpha.title} | ${alphaStatusLabel(alpha.status)}`;
+    nodes.alphaTabList.appendChild(tab);
   });
+
+  if (!selectedAlpha) {
+    const empty = document.createElement("div");
+    empty.className = "alpha-editor-placeholder";
+    empty.textContent = "请选择一个因子窗口，或先添加新的因子。";
+    nodes.alphaEditorShell.appendChild(empty);
+    return;
+  }
+
+  const card = document.createElement("article");
+  card.className = "alpha-card alpha-editor-card";
+
+  const header = document.createElement("div");
+  header.className = "alpha-card-header";
+
+  const heading = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = selectedAlpha.title;
+  const subtitle = document.createElement("span");
+  subtitle.className = `alpha-status status-${selectedAlpha.status}`;
+  subtitle.textContent = alphaStatusLabel(selectedAlpha.status);
+  heading.appendChild(title);
+  heading.appendChild(subtitle);
+
+  const actions = document.createElement("div");
+  actions.className = "alpha-actions";
+
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "ghost-button";
+  runButton.textContent = "仅运行此窗";
+  runButton.disabled = bootError || batchActive;
+  runButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    runAlphaSet([selectedAlpha.id]);
+  });
+
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "ghost-button danger-button";
+  removeButton.textContent = "删除";
+  removeButton.disabled = bootError || batchActive || state.alphas.length <= 1;
+  removeButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    removeAlphaWindow(selectedAlpha.id);
+  });
+
+  actions.appendChild(runButton);
+  actions.appendChild(removeButton);
+  header.appendChild(heading);
+  header.appendChild(actions);
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "alpha-textarea";
+  textarea.placeholder = "在这里输入因子表达式。空窗口不会加入本轮回测。";
+  textarea.value = selectedAlpha.expression;
+  textarea.disabled =
+    batchActive || selectedAlpha.status === "queued" || selectedAlpha.status === "running";
+  textarea.addEventListener("input", (event) => {
+    setAlphaExpression(selectedAlpha.id, event.target.value);
+  });
+
+  const controls = document.createElement("div");
+  controls.className = "alpha-control-grid";
+
+  const startDateWrap = document.createElement("label");
+  startDateWrap.className = "alpha-field-control";
+  startDateWrap.innerHTML = "<span>开始日期</span>";
+
+  const startDateInput = document.createElement("input");
+  startDateInput.type = "date";
+  startDateInput.min = defaultStartDate();
+  startDateInput.max = defaultEndDate();
+  startDateInput.value = selectedAlpha.startDate;
+  startDateInput.disabled =
+    batchActive || selectedAlpha.status === "queued" || selectedAlpha.status === "running";
+  startDateInput.addEventListener("input", (event) => {
+    selectedAlpha.startDate = event.target.value || selectedAlpha.startDate;
+  });
+  startDateInput.addEventListener("change", (event) => {
+    event.target.value = setAlphaDate(selectedAlpha.id, "startDate", event.target.value);
+  });
+  startDateInput.addEventListener("blur", (event) => {
+    event.target.value = setAlphaDate(selectedAlpha.id, "startDate", event.target.value);
+  });
+  startDateWrap.appendChild(startDateInput);
+  controls.appendChild(startDateWrap);
+
+  const endDateWrap = document.createElement("label");
+  endDateWrap.className = "alpha-field-control";
+  endDateWrap.innerHTML = "<span>结束日期</span>";
+
+  const endDateInput = document.createElement("input");
+  endDateInput.type = "date";
+  endDateInput.min = defaultStartDate();
+  endDateInput.max = defaultEndDate();
+  endDateInput.value = selectedAlpha.endDate;
+  endDateInput.disabled =
+    batchActive || selectedAlpha.status === "queued" || selectedAlpha.status === "running";
+  endDateInput.addEventListener("input", (event) => {
+    selectedAlpha.endDate = event.target.value || selectedAlpha.endDate;
+  });
+  endDateInput.addEventListener("change", (event) => {
+    event.target.value = setAlphaDate(selectedAlpha.id, "endDate", event.target.value);
+  });
+  endDateInput.addEventListener("blur", (event) => {
+    event.target.value = setAlphaDate(selectedAlpha.id, "endDate", event.target.value);
+  });
+  endDateWrap.appendChild(endDateInput);
+  controls.appendChild(endDateWrap);
+
+  const decayWrap = document.createElement("label");
+  decayWrap.className = "alpha-field-control alpha-decay-control";
+  decayWrap.innerHTML = "<span>Decay</span>";
+
+  const decayInput = document.createElement("input");
+  decayInput.type = "number";
+  decayInput.min = "1";
+  decayInput.step = "1";
+  decayInput.value = String(selectedAlpha.decay);
+  decayInput.disabled =
+    batchActive || selectedAlpha.status === "queued" || selectedAlpha.status === "running";
+  decayInput.addEventListener("input", (event) => {
+    const nextValue = Number(event.target.value);
+    selectedAlpha.decay =
+      Number.isFinite(nextValue) && nextValue >= 1 ? nextValue : selectedAlpha.decay;
+  });
+  decayInput.addEventListener("change", (event) => {
+    event.target.value = String(setAlphaDecay(selectedAlpha.id, event.target.value));
+  });
+  decayInput.addEventListener("blur", (event) => {
+    event.target.value = String(setAlphaDecay(selectedAlpha.id, event.target.value));
+  });
+  decayWrap.appendChild(decayInput);
+  controls.appendChild(decayWrap);
+
+  const footer = document.createElement("div");
+  footer.className = "alpha-card-footer";
+
+  const message = document.createElement("div");
+  message.className = "alpha-message";
+  message.textContent = selectedAlpha.message;
+
+  const progressShell = document.createElement("div");
+  progressShell.className = "mini-progress-shell";
+  const progressBar = document.createElement("div");
+  progressBar.className = "mini-progress-bar";
+  progressBar.style.width = `${clamp(selectedAlpha.progress, 0, 1) * 100}%`;
+  progressShell.appendChild(progressBar);
+
+  const summary = document.createElement("div");
+  summary.className = "alpha-summary-row";
+  summary.innerHTML = buildAlphaSummary(selectedAlpha);
+
+  footer.appendChild(message);
+  footer.appendChild(progressShell);
+  footer.appendChild(summary);
+
+  card.appendChild(header);
+  card.appendChild(textarea);
+  card.appendChild(controls);
+  card.appendChild(footer);
+  nodes.alphaEditorShell.appendChild(card);
 }
 
 function renderSummary(summary) {
@@ -735,8 +825,8 @@ function collectRunnableAlphaIds(alphaIds) {
 function currentPayload(alpha, settings) {
   return {
     expression: alpha.expression.trim(),
-    startDate: settings.startDate,
-    endDate: settings.endDate,
+    startDate: alpha.startDate,
+    endDate: alpha.endDate,
     decay: sanitizeDecayValue(alpha.decay),
   };
 }
@@ -780,7 +870,7 @@ async function pollJob(alphaId, jobId, runToken) {
   }
 }
 
-async function runSingleAlphaJob(alphaId, settings) {
+async function runSingleAlphaJob(alphaId) {
   const alpha = prepareAlphaForRun(alphaId);
   if (!alpha) {
     return;
@@ -797,7 +887,7 @@ async function runSingleAlphaJob(alphaId, settings) {
     const job = await fetchJson("/api/backtests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentPayload(alpha, settings)),
+      body: JSON.stringify(currentPayload(alpha)),
     });
 
     if (alpha.runToken !== runToken) {
@@ -883,15 +973,10 @@ async function runAlphaSet(alphaIds) {
     runnableIds.length === 1 ? 1 : configuredParallelLimit();
   const hardLimit = state.meta?.parallelLimitMax || requestedLimit;
   const limit = clamp(requestedLimit, 1, hardLimit);
-  const settings = {
-    startDate: nodes.startDate.value,
-    endDate: nodes.endDate.value,
-  };
 
   state.batch = {
     alphaIds: runnableIds.slice(),
     limit,
-    settings,
   };
   renderBatchStatus();
   renderAlphaWindows();
@@ -905,7 +990,7 @@ async function runAlphaSet(alphaIds) {
       while (activeCount < limit && queue.length) {
         const alphaId = queue.shift();
         activeCount += 1;
-        runSingleAlphaJob(alphaId, settings)
+        runSingleAlphaJob(alphaId)
           .catch(() => undefined)
           .finally(() => {
             activeCount -= 1;
@@ -946,17 +1031,10 @@ async function bootstrap() {
     renderRulesHelp();
     renderCatalog();
 
-    if (meta.dateRange?.start && meta.dateRange?.end) {
-      nodes.startDate.min = meta.dateRange.start;
-      nodes.startDate.max = meta.dateRange.end;
-      nodes.endDate.min = meta.dateRange.start;
-      nodes.endDate.max = meta.dateRange.end;
-      nodes.startDate.value = window.APP_DEFAULTS.startDate;
-      nodes.endDate.value = window.APP_DEFAULTS.endDate;
-    }
-
     createAlphaWindow(meta.defaultExpression || window.APP_DEFAULTS.defaultExpression, {
       select: true,
+      startDate: window.APP_DEFAULTS.startDate || meta.dateRange?.start,
+      endDate: window.APP_DEFAULTS.endDate || meta.dateRange?.end,
     });
 
     if (meta.bootError) {

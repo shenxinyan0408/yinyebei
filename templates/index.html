@@ -40,17 +40,6 @@
             </div>
           </div>
 
-          <div class="input-grid settings-grid">
-            <div class="input-card">
-              <label class="field-label" for="start-date">开始日期</label>
-              <input id="start-date" type="date" value="{{ default_start }}" />
-            </div>
-            <div class="input-card">
-              <label class="field-label" for="end-date">结束日期</label>
-              <input id="end-date" type="date" value="{{ default_end }}" />
-            </div>
-          </div>
-
           <div class="fixed-rules">
             <p class="section-kicker">固定规则</p>
             <div id="fixed-rules-list" class="pill-row"></div>
@@ -61,7 +50,13 @@
             <div id="example-buttons" class="example-buttons"></div>
           </div>
 
-          <div id="alpha-windows" class="alpha-windows"></div>
+          <div class="alpha-workspace">
+            <div class="alpha-browser">
+              <p class="section-kicker">因子列表</p>
+              <div id="alpha-tab-list" class="alpha-tab-list"></div>
+            </div>
+            <div id="alpha-editor-shell" class="alpha-editor-shell"></div>
+          </div>
 
           <div class="status-card">
             <div class="status-row">
