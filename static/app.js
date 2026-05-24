@@ -7,6 +7,16 @@ const state = {
   selectedAlphaId: null,
   nextAlphaNumber: 1,
   batch: null,
+  dataSetupSaving: false,
+  cachePrewarm: {
+    status: "idle",
+    progress: 0,
+    message: "等待开始。",
+    jobId: null,
+    result: null,
+    error: null,
+    runToken: null,
+  },
   correlation: {
     alphaAId: null,
     alphaBId: null,
@@ -21,6 +31,19 @@ const state = {
 };
 
 const nodes = {
+  dataSetupPanel: document.getElementById("data-setup-panel"),
+  setupMinuteDataDir: document.getElementById("setup-minute-data-dir"),
+  setupDailyDataFile: document.getElementById("setup-daily-data-file"),
+  dataSetupMessage: document.getElementById("data-setup-message"),
+  dataSetupConfigFile: document.getElementById("data-setup-config-file"),
+  saveDataSetupButton: document.getElementById("save-data-setup"),
+  cachePrewarmPanel: document.getElementById("cache-prewarm-panel"),
+  cachePrewarmSummary: document.getElementById("cache-prewarm-summary"),
+  cachePrewarmStatusText: document.getElementById("cache-prewarm-status-text"),
+  cachePrewarmProgressBar: document.getElementById("cache-prewarm-progress-bar"),
+  cachePrewarmDetail: document.getElementById("cache-prewarm-detail"),
+  startCachePrewarmButton: document.getElementById("start-cache-prewarm"),
+  refreshCacheSummaryButton: document.getElementById("refresh-cache-summary"),
   addAlphaButton: document.getElementById("add-alpha"),
   runAllButton: document.getElementById("run-all-backtests"),
   windowCount: document.getElementById("window-count"),
@@ -177,6 +200,76 @@ function invalidateCorrelationResultIfUsesAlpha(alphaId) {
 function updateBatchCard(message, progress = 0) {
   nodes.batchStatusText.textContent = message;
   nodes.batchProgressBar.style.width = `${clamp(progress, 0, 1) * 100}%`;
+}
+
+function renderDataSetupPanel() {
+  if (!nodes.dataSetupPanel) {
+    return;
+  }
+
+  const dataSetup = state.meta?.dataSetup || {};
+  const bootError = state.meta?.bootError || "";
+  const showPanel = Boolean(bootError);
+
+  nodes.dataSetupPanel.classList.toggle("hidden", !showPanel);
+  nodes.setupMinuteDataDir.value = dataSetup.minuteDataDir || "";
+  nodes.setupDailyDataFile.value = dataSetup.dailyDataFile || "";
+  nodes.saveDataSetupButton.disabled = state.dataSetupSaving;
+  nodes.dataSetupMessage.textContent = state.dataSetupSaving
+    ? "正在保存数据路径并重新连接……"
+    : bootError ||
+      "代码仓库本身不包含本地数据，请填写你自己的分钟数据目录和标签文件路径。";
+  nodes.dataSetupConfigFile.textContent = dataSetup.configFile
+    ? `本机配置文件：${dataSetup.configFile}。分钟缓存目录：${dataSetup.minuteCacheDir || "未设置"}。这些内容都只保存在当前机器上，不会提交到 Git。`
+    : "";
+}
+
+function isCachePrewarmRunning() {
+  return state.cachePrewarm.status === "queued" || state.cachePrewarm.status === "running";
+}
+
+function renderCachePrewarmPanel() {
+  if (!nodes.cachePrewarmPanel) {
+    return;
+  }
+
+  const summary = state.meta?.cacheSummary || {};
+  const bootError = Boolean(state.meta?.bootError);
+  const running = isCachePrewarmRunning();
+  const totalDates = Number(summary.totalDates || 0);
+  const readyDates = Number(summary.readyDates || 0);
+  const missingDates = Number(summary.missingDates || 0);
+  const cacheDir = summary.cacheDir || state.meta?.minuteCacheDirectory || "";
+
+  nodes.startCachePrewarmButton.disabled = bootError || running || totalDates <= 0;
+  nodes.refreshCacheSummaryButton.disabled = running;
+  nodes.cachePrewarmStatusText.textContent = state.cachePrewarm.message || "等待开始。";
+  nodes.cachePrewarmProgressBar.style.width = `${clamp(state.cachePrewarm.progress, 0, 1) * 100}%`;
+
+  if (bootError) {
+    nodes.cachePrewarmSummary.textContent = "请先连接本机数据，再进行缓存预热。";
+    nodes.cachePrewarmDetail.textContent = "";
+    return;
+  }
+
+  nodes.cachePrewarmSummary.textContent =
+    `当前已缓存 ${readyDates}/${totalDates} 个交易日，待补齐 ${missingDates} 个。`;
+
+  if (running) {
+    nodes.cachePrewarmDetail.textContent =
+      `缓存目录：${cacheDir}。正在后台预热，建议等待完成后再做大区间重复回测。`;
+    return;
+  }
+
+  if (state.cachePrewarm.result) {
+    const result = state.cachePrewarm.result;
+    nodes.cachePrewarmDetail.textContent =
+      `缓存目录：${cacheDir}。本次新增 ${result.builtDates || 0} 天，跳过 ${result.skippedDates || 0} 天，失败 ${result.failedDates || 0} 天。`;
+    return;
+  }
+
+  nodes.cachePrewarmDetail.textContent =
+    `缓存目录：${cacheDir}。第一次预热会逐日读取原始 .mat 文件，之后重复回测通常会快很多。`;
 }
 
 function configuredParallelLimit() {
@@ -628,9 +721,10 @@ function renderCorrelationPanel() {
 
   const ready = Boolean(state.correlation.alphaAId && state.correlation.alphaBId);
   const running = isCorrelationRunning();
-  nodes.correlationAlphaA.disabled = running || state.alphas.length < 2;
-  nodes.correlationAlphaB.disabled = running || state.alphas.length < 2;
-  nodes.runCorrelationButton.disabled = running || state.alphas.length < 2;
+  const bootError = Boolean(state.meta?.bootError);
+  nodes.correlationAlphaA.disabled = bootError || running || state.alphas.length < 2;
+  nodes.correlationAlphaB.disabled = bootError || running || state.alphas.length < 2;
+  nodes.runCorrelationButton.disabled = bootError || running || state.alphas.length < 2;
   nodes.correlationStatusText.textContent =
     state.correlation.message || correlationStatusLabel(state.correlation.status);
   nodes.correlationProgressBar.style.width = `${clamp(state.correlation.progress, 0, 1) * 100}%`;
@@ -1183,6 +1277,156 @@ async function fetchJson(url, options = {}) {
   return payload;
 }
 
+async function saveDataSetup() {
+  const minuteDataDir = nodes.setupMinuteDataDir.value.trim();
+  const dailyDataFile = nodes.setupDailyDataFile.value.trim();
+
+  if (!minuteDataDir && !dailyDataFile) {
+    nodes.dataSetupMessage.textContent = "请至少填写一个数据路径。";
+    return;
+  }
+
+  state.dataSetupSaving = true;
+  renderDataSetupPanel();
+
+  try {
+    const meta = await fetchJson("/api/data-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        minuteDataDir,
+        dailyDataFile,
+      }),
+    });
+
+    state.meta = meta;
+    state.alphas.forEach((alpha) => {
+      if (!alpha.startDate) {
+        alpha.startDate = meta.dateRange?.start || "";
+      }
+      if (!alpha.endDate) {
+        alpha.endDate = meta.dateRange?.end || "";
+      }
+    });
+    state.dataSetupSaving = false;
+    renderDataSetupPanel();
+    renderCachePrewarmPanel();
+    renderAlphaWindows();
+    renderSelectedAlphaResult();
+    renderCorrelationPanel();
+    if (meta.bootError) {
+      updateBatchCard(meta.bootError, 1);
+      return;
+    }
+    updateBatchCard("数据路径已更新，可以开始回测。", 0);
+    renderBatchStatus();
+  } catch (error) {
+    state.dataSetupSaving = false;
+    renderDataSetupPanel();
+    nodes.dataSetupMessage.textContent =
+      error.message || "保存数据路径失败，请检查路径后重试。";
+  }
+}
+
+async function refreshMetaState() {
+  const meta = await fetchJson("/api/meta");
+  state.meta = meta;
+  renderDataSetupPanel();
+  renderCachePrewarmPanel();
+  return meta;
+}
+
+async function refreshCacheSummary() {
+  try {
+    const meta = await refreshMetaState();
+    if (!meta.bootError) {
+      updateBatchCard(nodes.batchStatusText.textContent || "等待运行。", 0);
+    }
+  } catch (error) {
+    state.cachePrewarm.error = error.message || "刷新缓存状态失败。";
+    state.cachePrewarm.message = state.cachePrewarm.error;
+    renderCachePrewarmPanel();
+  }
+}
+
+async function pollCachePrewarmJob(jobId, runToken) {
+  while (true) {
+    if (state.cachePrewarm.runToken !== runToken) {
+      return;
+    }
+    const job = await fetchJson(`/api/cache-prewarm/${jobId}`);
+    if (state.cachePrewarm.runToken !== runToken) {
+      return;
+    }
+
+    state.cachePrewarm.status = job.status;
+    state.cachePrewarm.progress = Number(job.progress || 0);
+    state.cachePrewarm.message = job.message || state.cachePrewarm.message;
+    state.cachePrewarm.jobId = jobId;
+
+    if (job.status === "succeeded") {
+      state.cachePrewarm.result = job.result || null;
+      state.cachePrewarm.error = null;
+      state.cachePrewarm.progress = 1;
+      await refreshMetaState();
+      renderCachePrewarmPanel();
+      return;
+    }
+
+    if (job.status === "failed") {
+      state.cachePrewarm.result = null;
+      state.cachePrewarm.error = job.message || "缓存预热失败。";
+      state.cachePrewarm.progress = 1;
+      renderCachePrewarmPanel();
+      return;
+    }
+
+    renderCachePrewarmPanel();
+    await sleep(1000);
+  }
+}
+
+async function startCachePrewarm() {
+  if (isCachePrewarmRunning()) {
+    return;
+  }
+
+  state.cachePrewarm.status = "queued";
+  state.cachePrewarm.progress = 0;
+  state.cachePrewarm.message = "正在提交缓存预热任务……";
+  state.cachePrewarm.result = null;
+  state.cachePrewarm.error = null;
+  state.cachePrewarm.jobId = null;
+  state.cachePrewarm.runToken = generateAlphaId();
+  const runToken = state.cachePrewarm.runToken;
+  renderCachePrewarmPanel();
+
+  try {
+    const job = await fetchJson("/api/cache-prewarm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    if (state.cachePrewarm.runToken !== runToken) {
+      return;
+    }
+
+    state.cachePrewarm.jobId = job.jobId;
+    state.cachePrewarm.status = job.status || "queued";
+    state.cachePrewarm.message = "已进入缓存预热队列。";
+    renderCachePrewarmPanel();
+    await pollCachePrewarmJob(job.jobId, runToken);
+  } catch (error) {
+    state.cachePrewarm.status = "failed";
+    state.cachePrewarm.progress = 1;
+    state.cachePrewarm.result = null;
+    state.cachePrewarm.error = error.message || "提交缓存预热失败。";
+    state.cachePrewarm.message = state.cachePrewarm.error;
+    renderCachePrewarmPanel();
+  }
+}
+
 function collectRunnableAlphaIds(alphaIds) {
   const runnable = [];
   alphaIds.forEach((alphaId) => {
@@ -1606,6 +1850,8 @@ async function bootstrap() {
     state.meta = meta;
     state.catalog = catalog;
 
+    renderDataSetupPanel();
+    renderCachePrewarmPanel();
     renderFixedRules();
     renderExamples();
     renderRulesHelp();
@@ -1621,10 +1867,14 @@ async function bootstrap() {
       updateBatchCard(meta.bootError, 1);
       renderAlphaWindows();
       renderSelectedAlphaResult();
+      renderCachePrewarmPanel();
+      renderCorrelationPanel();
       return;
     }
 
     renderBatchStatus();
+    renderCachePrewarmPanel();
+    renderCorrelationPanel();
   } catch (error) {
     updateBatchCard(error.message || "页面初始化失败。", 1);
     renderSummaryPlaceholder("页面初始化失败。");
@@ -1638,6 +1888,9 @@ nodes.addAlphaButton.addEventListener("click", () => {
 
 nodes.runAllButton.addEventListener("click", runAllBacktests);
 nodes.runCorrelationButton.addEventListener("click", runCorrelationAnalysis);
+nodes.saveDataSetupButton.addEventListener("click", saveDataSetup);
+nodes.startCachePrewarmButton.addEventListener("click", startCachePrewarm);
+nodes.refreshCacheSummaryButton.addEventListener("click", refreshCacheSummary);
 
 nodes.correlationAlphaA.addEventListener("change", (event) => {
   setCorrelationSelection("A", event.target.value);

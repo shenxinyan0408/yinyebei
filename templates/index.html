@@ -26,6 +26,43 @@
         </div>
       </header>
 
+      <section id="data-setup-panel" class="panel data-setup-panel hidden">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">首次使用</p>
+            <h2>数据路径设置</h2>
+            <p class="panel-subtitle">
+              代码仓库不会包含 `.mat` 分钟数据和本地标签数据。第一次在新机器上使用时，请在这里填写你自己的数据路径。
+            </p>
+          </div>
+          <div class="panel-actions">
+            <button id="save-data-setup" class="primary-button" type="button">保存路径并重新连接</button>
+          </div>
+        </div>
+
+        <div class="data-setup-grid">
+          <label class="alpha-field-control">
+            <span>分钟数据目录</span>
+            <input
+              id="setup-minute-data-dir"
+              type="text"
+              placeholder="例如：D:\data\股票分钟数据"
+            />
+          </label>
+          <label class="alpha-field-control">
+            <span>标签文件路径</span>
+            <input
+              id="setup-daily-data-file"
+              type="text"
+              placeholder="例如：D:\data\DailyData20240102open.bin"
+            />
+          </label>
+        </div>
+
+        <p id="data-setup-message" class="setup-note"></p>
+        <p id="data-setup-config-file" class="setup-note"></p>
+      </section>
+
       <main class="workspace">
         <section class="panel editor-panel">
           <div class="panel-header">
@@ -259,6 +296,36 @@
           <div id="rules-help-list" class="rules-help-list"></div>
         </div>
         <div id="catalog-list" class="catalog-list"></div>
+      </section>
+
+      <section id="cache-prewarm-panel" class="panel cache-prewarm-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">本机缓存</p>
+            <h2>分钟缓存预热</h2>
+            <p class="panel-subtitle">
+              第一次可以先把全部交易日的分钟缓存建好。后面重复回测同一批日期时，通常会快很多。
+            </p>
+          </div>
+          <div class="panel-actions">
+            <button id="refresh-cache-summary" class="secondary-button" type="button">刷新状态</button>
+            <button id="start-cache-prewarm" class="primary-button" type="button">预热全部缓存</button>
+          </div>
+        </div>
+
+        <p id="cache-prewarm-summary" class="setup-note"></p>
+
+        <div class="status-card">
+          <div class="status-row">
+            <span class="section-kicker">预热状态</span>
+            <span id="cache-prewarm-status-text">等待开始。</span>
+          </div>
+          <div class="progress-shell">
+            <div id="cache-prewarm-progress-bar" class="progress-bar"></div>
+          </div>
+        </div>
+
+        <p id="cache-prewarm-detail" class="setup-note"></p>
       </section>
     </div>
 

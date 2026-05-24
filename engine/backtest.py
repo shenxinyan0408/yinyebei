@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import functools
 import math
+import os
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Any
 
@@ -34,10 +38,17 @@ class BacktestEngine:
         data_store: MinuteDataStore,
         expression_engine: ExpressionEngine,
         label_store: DailyLabelStore,
+        raw_alpha_workers: int | None = None,
+        decay_workers: int | None = None,
     ):
         self.data_store = data_store
         self.expression_engine = expression_engine
         self.label_store = label_store
+        self.stock_codes = tuple(label_store.stock_codes)
+        self.stock_index = pd.Index(self.stock_codes)
+        default_workers = max(1, min(4, os.cpu_count() or 1))
+        self.raw_alpha_workers = max(1, raw_alpha_workers or default_workers)
+        self.decay_workers = max(1, decay_workers or default_workers)
 
     def run(
         self,
@@ -79,135 +90,129 @@ class BacktestEngine:
         signal_eval_dates = warmup_dates + unique_signal_dates
         required_fields = self.expression_engine.collect_required_raw_fields(inputs.expression)
 
-        signal_series: dict[str, pd.Series] = {}
+        signal_eval_set = set(signal_eval_dates)
+        unique_signal_set = set(unique_signal_dates)
+        executable_trade_set = set(executable_trade_dates)
+        required_or_open_dates = sorted(signal_eval_set | executable_trade_set)
+
         coverage_rows: list[dict[str, Any]] = []
-        total_signal_days = len(signal_eval_dates)
-        progress(0.03, "Preparing minute data and evaluating signals...")
-
-        for index, date in enumerate(signal_eval_dates, start=1):
-            day = self.data_store.load_day(date, required_fields)
-            signal = self.expression_engine.evaluate(
-                inputs.expression, day.fields, day.minute_labels
-            )
-            signal_invalid = np.zeros(len(day.stock_list), dtype=bool)
-            for field_name in required_fields:
-                signal_invalid |= day.field_invalid_masks[field_name]
-            signal = np.where(signal_invalid, np.nan, signal)
-            signal = np.where(np.isfinite(signal), signal, np.nan)
-            signal_series[date] = pd.Series(signal, index=day.stock_list, dtype=np.float64)
-            coverage_rows.append(
-                {
-                    "date": date,
-                    "coverage": float(np.isfinite(signal).sum() / len(signal))
-                    if len(signal)
-                    else 0.0,
-                }
-            )
-            progress(
-                0.03 + 0.47 * index / max(total_signal_days, 1),
-                f"Evaluated signal for {date} ({index}/{total_signal_days})",
-            )
-
-        open_dates = sorted(set(executable_trade_dates))
-        open_series: dict[str, pd.Series] = {}
-        for date in open_dates:
-            day = self.data_store.load_day(date, set())
-            open_values = np.where(day.trade_open_valid, day.trade_open, np.nan)
-            open_series[date] = pd.Series(open_values, index=day.stock_list, dtype=np.float64)
-
-        signal_df = pd.DataFrame.from_dict(signal_series, orient="index", dtype=np.float64).sort_index()
-        decayed_df = self._compute_decayed_scores(
-            signal_df, unique_signal_dates, inputs.decay, progress
-        )
-        coverage_df = pd.DataFrame(coverage_rows).set_index("date")
-        open_df = pd.DataFrame.from_dict(open_series, orient="index", dtype=np.float64).sort_index()
-        label_df = self.label_store.load_label_frame(unique_signal_dates, signal_df.columns.tolist())
-        ic_df = self._compute_ic_series(
-            decayed_df.reindex(unique_signal_dates),
-            label_df.reindex(unique_signal_dates),
-        )
-
-        weights_by_trade_date: dict[str, pd.Series] = {}
-        turnover_rows: list[float] = []
-        previous_weights = pd.Series(dtype=np.float64)
+        ic_rows: list[dict[str, Any]] = []
         selected_counts: list[int] = []
         candidate_counts: list[int] = []
-
-        progress(0.60, "Building daily portfolios...")
-        for index, trade_date in enumerate(executable_trade_dates, start=1):
-            signal_date = self.data_store.previous_trading_day(trade_date)
-            if signal_date is None:
-                continue
-            scores = decayed_df.loc[signal_date]
-            entry_open = open_df.loc[trade_date]
-            candidates = scores.dropna().index.intersection(entry_open.dropna().index)
-            candidate_scores = scores.loc[candidates].dropna()
-            candidate_counts.append(int(candidate_scores.shape[0]))
-            if candidate_scores.empty:
-                weights = pd.Series(dtype=np.float64)
-            else:
-                top_count = max(1, int(math.ceil(candidate_scores.shape[0] * 0.1)))
-                selected = candidate_scores.nlargest(top_count)
-                weights = pd.Series(
-                    1.0 / top_count, index=selected.index, dtype=np.float64
-                )
-            weights_by_trade_date[trade_date] = weights
-            selected_counts.append(int(weights.shape[0]))
-            union_index = previous_weights.index.union(weights.index)
-            aligned_previous = previous_weights.reindex(union_index, fill_value=0.0)
-            aligned_current = weights.reindex(union_index, fill_value=0.0)
-            turnover_rows.append(float(0.5 * np.abs(aligned_current - aligned_previous).sum()))
-            previous_weights = weights
-            progress(
-                0.60 + 0.15 * index / max(len(executable_trade_dates), 1),
-                f"Built portfolio for {trade_date}",
-            )
-
-        if len(executable_trade_dates) < 2:
-            raise BacktestError("Need at least two executable trade dates to compute returns.")
-
         returns_rows: list[dict[str, Any]] = []
-        progress(0.78, "Computing open-to-open returns...")
-        for index, (entry_date, exit_date) in enumerate(
-            zip(executable_trade_dates[:-1], executable_trade_dates[1:]),
-            start=1,
-        ):
-            weights = weights_by_trade_date.get(entry_date, pd.Series(dtype=np.float64))
-            if weights.empty:
-                day_return = 0.0
-                holding_count = 0
-            else:
-                entry_open = open_df.loc[entry_date].reindex(weights.index)
-                exit_open = open_df.loc[exit_date].reindex(weights.index)
-                valid = (
-                    entry_open.notna()
-                    & exit_open.notna()
-                    & (entry_open > 0)
-                    & (exit_open > 0)
+
+        label_df = self.label_store.load_label_frame(unique_signal_dates, self.stock_codes)
+
+        previous_weights = np.zeros(len(self.stock_codes), dtype=np.float64)
+        previous_entry_open: np.ndarray | None = None
+        previous_entry_date: str | None = None
+        previous_turnover = 0.0
+        signal_position = {date: index for index, date in enumerate(signal_eval_dates)}
+
+        progress(0.03, "Parallel raw alpha stage...")
+        with ThreadPoolExecutor(max_workers=self.raw_alpha_workers) as raw_pool:
+            raw_futures = {
+                date: raw_pool.submit(
+                    self._evaluate_day_snapshot,
+                    date,
+                    required_fields if date in signal_eval_set else set(),
+                    date in signal_eval_set,
+                    inputs.expression,
+                    required_fields,
+                    date in unique_signal_set,
                 )
-                if not valid.any():
-                    day_return = 0.0
-                    holding_count = 0
-                else:
-                    realized = (exit_open[valid] / entry_open[valid]) - 1.0
-                    effective_weights = pd.Series(
-                        1.0 / realized.shape[0], index=realized.index, dtype=np.float64
+                for date in required_or_open_dates
+            }
+
+            progress(0.38, "Parallel decay stage...")
+            with ThreadPoolExecutor(max_workers=self.decay_workers) as decay_pool:
+                decay_futures = {
+                    date: decay_pool.submit(
+                        self._compute_decayed_snapshot,
+                        date,
+                        signal_eval_dates,
+                        signal_position[date],
+                        inputs.decay,
+                        raw_futures,
+                        label_df.loc[date].to_numpy(dtype=np.float64, copy=False)
+                        if date in label_df.index
+                        else np.full(len(self.stock_codes), np.nan, dtype=np.float64),
                     )
-                    day_return = float((effective_weights * realized).sum())
-                    holding_count = int(realized.shape[0])
-            returns_rows.append(
-                {
-                    "date": exit_date,
-                    "entryDate": entry_date,
-                    "return": day_return,
-                    "holdings": holding_count,
-                    "turnover": turnover_rows[index - 1],
+                    for date in unique_signal_dates
                 }
-            )
-            progress(
-                0.78 + 0.14 * index / max(len(executable_trade_dates) - 1, 1),
-                f"Computed returns through {exit_date}",
-            )
+
+                for index, trade_date in enumerate(executable_trade_dates, start=1):
+                    open_snapshot = raw_futures[trade_date].result()
+                    trade_open_full = open_snapshot["trade_open"]
+
+                    if previous_entry_open is not None and previous_entry_date is not None:
+                        valid = (
+                            (previous_weights > 0)
+                            & np.isfinite(previous_entry_open)
+                            & np.isfinite(trade_open_full)
+                            & (previous_entry_open > 0)
+                            & (trade_open_full > 0)
+                        )
+                        if valid.any():
+                            realized = trade_open_full[valid] / previous_entry_open[valid] - 1.0
+                            day_return = float(realized.mean())
+                            holding_count = int(valid.sum())
+                        else:
+                            day_return = 0.0
+                            holding_count = 0
+                        returns_rows.append(
+                            {
+                                "date": trade_date,
+                                "entryDate": previous_entry_date,
+                                "return": day_return,
+                                "holdings": holding_count,
+                                "turnover": previous_turnover,
+                            }
+                        )
+
+                    signal_date = self.data_store.previous_trading_day(trade_date)
+                    if signal_date is None:
+                        continue
+
+                    decay_snapshot = decay_futures[signal_date].result()
+                    scores = decay_snapshot["signal"]
+                    ic_rows.append({"date": signal_date, "ic": decay_snapshot["ic"]})
+
+                    raw_snapshot = raw_futures[signal_date].result()
+                    if raw_snapshot["coverage"] is not None:
+                        coverage_rows.append(
+                            {
+                                "date": signal_date,
+                                "coverage": raw_snapshot["coverage"],
+                            }
+                        )
+
+                    current_weights = np.zeros(len(self.stock_codes), dtype=np.float64)
+                    candidate_mask = (
+                        np.isfinite(scores) & np.isfinite(trade_open_full) & (trade_open_full > 0)
+                    )
+                    candidate_positions = np.flatnonzero(candidate_mask)
+                    candidate_counts.append(int(candidate_positions.size))
+
+                    if candidate_positions.size > 0:
+                        candidate_scores = scores[candidate_positions]
+                        top_count = max(1, int(math.ceil(candidate_positions.size * 0.1)))
+                        selected_local = np.argpartition(candidate_scores, -top_count)[-top_count:]
+                        selected_positions = candidate_positions[selected_local]
+                        current_weights[selected_positions] = 1.0 / top_count
+                        selected_counts.append(int(top_count))
+                    else:
+                        selected_counts.append(0)
+
+                    previous_turnover = float(0.5 * np.abs(current_weights - previous_weights).sum())
+                    previous_weights = current_weights
+                    previous_entry_open = trade_open_full
+                    previous_entry_date = trade_date
+
+                    progress(
+                        0.52 + 0.44 * index / max(len(executable_trade_dates), 1),
+                        f"Processed {trade_date} ({index}/{len(executable_trade_dates)})",
+                    )
 
         if not returns_rows:
             raise BacktestError("No return observations were produced for the selected range.")
@@ -216,6 +221,8 @@ class BacktestEngine:
         returns_df["equity"] = (1.0 + returns_df["return"]).cumprod()
         returns_df["peak"] = returns_df["equity"].cummax()
         returns_df["drawdown"] = returns_df["equity"] / returns_df["peak"] - 1.0
+        coverage_df = pd.DataFrame(coverage_rows).set_index("date").sort_index()
+        ic_df = pd.DataFrame(ic_rows).set_index("date").sort_index()
         summary = self._build_summary(
             returns_df,
             coverage_df.reindex(unique_signal_dates)["coverage"].dropna(),
@@ -274,6 +281,98 @@ class BacktestEngine:
         if end_date < available_dates[0] or start_date > available_dates[-1]:
             raise BacktestError("Selected date range does not overlap the available minute data.")
         return BacktestInputs(clean_expression, start_date, end_date, decay)
+
+    @functools.lru_cache(maxsize=256)
+    def _stock_positions(self, stock_list: tuple[str, ...]) -> np.ndarray:
+        return self.stock_index.get_indexer(list(stock_list))
+
+    def _align_to_universe(
+        self,
+        values: np.ndarray,
+        stock_list: tuple[str, ...],
+    ) -> np.ndarray:
+        aligned = np.full(len(self.stock_codes), np.nan, dtype=np.float64)
+        positions = self._stock_positions(stock_list)
+        valid_positions = positions >= 0
+        if np.any(valid_positions):
+            aligned[positions[valid_positions]] = values[valid_positions]
+        return aligned
+
+    def _mask_invalid_signal(
+        self,
+        signal: np.ndarray,
+        required_fields: set[str],
+        field_invalid_masks: dict[str, np.ndarray],
+    ) -> np.ndarray:
+        signal_invalid = np.zeros(signal.shape[0], dtype=bool)
+        for field_name in required_fields:
+            signal_invalid |= field_invalid_masks[field_name]
+        signal = np.where(signal_invalid, np.nan, signal)
+        return np.where(np.isfinite(signal), signal, np.nan)
+
+    def _evaluate_day_snapshot(
+        self,
+        date: str,
+        requested_fields: set[str],
+        evaluate_signal: bool,
+        expression: str,
+        required_fields: set[str],
+        capture_coverage: bool,
+    ) -> dict[str, Any]:
+        day = self.data_store.load_day(date, requested_fields)
+        snapshot: dict[str, Any] = {
+            "date": date,
+            "trade_open": self._align_to_universe(day.trade_open, day.stock_list),
+            "raw_signal": None,
+            "coverage": None,
+        }
+        if not evaluate_signal:
+            return snapshot
+
+        raw_signal = self.expression_engine.evaluate(expression, day.fields, day.minute_labels)
+        raw_signal = self._mask_invalid_signal(raw_signal, required_fields, day.field_invalid_masks)
+        snapshot["raw_signal"] = self._align_to_universe(raw_signal, day.stock_list)
+        if capture_coverage:
+            snapshot["coverage"] = (
+                float(np.isfinite(raw_signal).sum() / len(raw_signal)) if len(raw_signal) else 0.0
+            )
+        return snapshot
+
+    def _compute_decayed_from_arrays(self, raw_signal_arrays: list[np.ndarray]) -> np.ndarray:
+        if not raw_signal_arrays:
+            return np.full(len(self.stock_codes), np.nan, dtype=np.float64)
+        history = np.stack(raw_signal_arrays, axis=0)
+        weights = np.arange(1, history.shape[0] + 1, dtype=np.float64)
+        valid_mask = np.isfinite(history).all(axis=0)
+        weighted_sum = np.where(np.isfinite(history), history * weights[:, None], 0.0).sum(axis=0)
+        decayed = np.full(history.shape[1], np.nan, dtype=np.float64)
+        decayed[valid_mask] = weighted_sum[valid_mask] / weights.sum()
+        return decayed
+
+    def _compute_decayed_snapshot(
+        self,
+        date: str,
+        signal_eval_dates: list[str],
+        signal_position: int,
+        decay: int,
+        raw_futures: dict[str, Any],
+        label_row: np.ndarray,
+    ) -> dict[str, Any]:
+        window_start = max(0, signal_position - decay + 1)
+        window_dates = signal_eval_dates[window_start : signal_position + 1]
+        raw_signal_arrays = [
+            np.asarray(raw_futures[window_date].result()["raw_signal"], dtype=np.float64)
+            for window_date in window_dates
+        ]
+        decayed_signal = self._compute_decayed_from_arrays(raw_signal_arrays)
+        return {
+            "date": date,
+            "signal": decayed_signal,
+            "ic": self._cross_sectional_ic(decayed_signal, label_row),
+        }
+
+    def _compute_decayed_from_history(self, raw_signal_history: deque[np.ndarray]) -> np.ndarray:
+        return self._compute_decayed_from_arrays(list(raw_signal_history))
 
     def _compute_decayed_scores(
         self,
