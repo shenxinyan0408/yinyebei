@@ -940,7 +940,8 @@ function renderAlphaEditor() {
 
   const textarea = document.createElement("textarea");
   textarea.className = "alpha-textarea";
-  textarea.placeholder = "在这里输入因子表达式。空窗口不会加入本轮回测。";
+  textarea.placeholder =
+    "可输入多行：前几行用变量名 = 表达式；最后一行写最终表达式。空窗口不会加入本轮回测。";
   textarea.value = selectedAlpha.expression;
   textarea.disabled = selectedAlpha.status === "queued" || selectedAlpha.status === "running";
   textarea.addEventListener("input", (event) => {

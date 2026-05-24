@@ -19,11 +19,27 @@ class EvaluationContext:
     fields: dict[str, np.ndarray]
     minute_index: dict[str, int]
     derived_cache: dict[str, np.ndarray] = field(default_factory=dict)
+    variables: dict[str, Any] = field(default_factory=dict)
 
 
 class _FieldCollector(ast.NodeVisitor):
     def __init__(self) -> None:
-        self.names: set[str] = set()
+        self.assigned_names: set[str] = set()
+        self.used_names: set[str] = set()
+
+    def collect(self, tree: ast.Module) -> None:
+        for statement in tree.body:
+            if isinstance(statement, ast.Assign):
+                if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+                    raise ExpressionError("Only simple variable assignments are supported.")
+                self.assigned_names.add(statement.targets[0].id)
+                self.visit(statement.value)
+            elif isinstance(statement, ast.Expr):
+                self.visit(statement.value)
+            else:
+                raise ExpressionError(
+                    f"Unsupported statement type: {statement.__class__.__name__}"
+                )
 
     def visit_Call(self, node: ast.Call) -> Any:
         for arg in node.args:
@@ -32,17 +48,23 @@ class _FieldCollector(ast.NodeVisitor):
             self.visit(keyword.value)
 
     def visit_Name(self, node: ast.Name) -> Any:
-        self.names.add(node.id)
+        self.used_names.add(node.id)
 
 
 class ExpressionEngine:
+    RESERVED_IDENTIFIERS = FUNCTION_NAMES | RAW_EXPRESSION_FIELDS | {"VWAP", "True", "False"}
+    NON_FIELD_IDENTIFIERS = FUNCTION_NAMES | {"True", "False"}
+
     def collect_required_raw_fields(self, expression: str) -> set[str]:
-        tree = self._parse(expression)
+        tree = self._parse_program(expression)
+        self._validate_program(tree)
         collector = _FieldCollector()
-        collector.visit(tree.body)
+        collector.collect(tree)
+
         required: set[str] = set()
-        for name in collector.names:
-            if name in FUNCTION_NAMES or name in {"True", "False"}:
+        local_names = collector.assigned_names
+        for name in collector.used_names:
+            if name in self.NON_FIELD_IDENTIFIERS or name in local_names:
                 continue
             dependencies = resolve_field_dependencies(name)
             if not dependencies and name not in RAW_EXPRESSION_FIELDS:
@@ -56,12 +78,13 @@ class ExpressionEngine:
         fields: dict[str, np.ndarray],
         minute_labels: tuple[str, ...],
     ) -> np.ndarray:
-        tree = self._parse(expression)
+        tree = self._parse_program(expression)
+        self._validate_program(tree)
         context = EvaluationContext(
             fields=fields,
             minute_index={label: index for index, label in enumerate(minute_labels)},
         )
-        result = self._eval(tree.body, context)
+        result = self._eval_program(tree, context)
         if np.isscalar(result):
             raise ExpressionError("Expression must return a stock vector, not a scalar.")
         array = np.asarray(result, dtype=np.float64)
@@ -71,11 +94,61 @@ class ExpressionEngine:
             )
         return np.where(np.isfinite(array), array, np.nan)
 
-    def _parse(self, expression: str) -> ast.Expression:
+    def _parse_program(self, expression: str) -> ast.Module:
         try:
-            return ast.parse(expression, mode="eval")
+            return ast.parse(expression, mode="exec")
         except SyntaxError as exc:
             raise ExpressionError(f"Invalid expression syntax: {exc.msg}") from exc
+
+    def _validate_program(self, tree: ast.Module) -> None:
+        if not tree.body:
+            raise ExpressionError("Expression cannot be empty.")
+
+        last_index = len(tree.body) - 1
+        for index, statement in enumerate(tree.body):
+            if isinstance(statement, ast.Assign):
+                if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+                    raise ExpressionError("Only simple variable assignments are supported.")
+                target_name = statement.targets[0].id
+                self._validate_variable_name(target_name)
+                if index == last_index:
+                    raise ExpressionError(
+                        "The last line must be the final expression, not an assignment."
+                    )
+                continue
+
+            if isinstance(statement, ast.Expr):
+                if index != last_index:
+                    raise ExpressionError(
+                        "Only the last line may be a standalone expression. Earlier lines must assign to a variable."
+                    )
+                continue
+
+            raise ExpressionError(
+                f"Unsupported statement type: {statement.__class__.__name__}"
+            )
+
+    def _validate_variable_name(self, name: str) -> None:
+        if name in self.RESERVED_IDENTIFIERS:
+            raise ExpressionError(f"Cannot assign to reserved identifier: {name}")
+
+    def _eval_program(self, tree: ast.Module, context: EvaluationContext) -> Any:
+        result: Any = None
+        for statement in tree.body:
+            if isinstance(statement, ast.Assign):
+                target = statement.targets[0]
+                value = self._eval(statement.value, context)
+                context.variables[target.id] = value
+            elif isinstance(statement, ast.Expr):
+                result = self._eval(statement.value, context)
+            else:  # pragma: no cover - guarded by _validate_program
+                raise ExpressionError(
+                    f"Unsupported statement type: {statement.__class__.__name__}"
+                )
+
+        if result is None:
+            raise ExpressionError("The last line must produce a final expression result.")
+        return result
 
     def _eval(self, node: ast.AST, context: EvaluationContext) -> Any:
         if isinstance(node, ast.Constant):
@@ -107,6 +180,8 @@ class ExpressionEngine:
         raise ExpressionError(f"Unsupported expression element: {node.__class__.__name__}")
 
     def _resolve_name(self, name: str, context: EvaluationContext) -> Any:
+        if name in context.variables:
+            return context.variables[name]
         if name in context.fields:
             return context.fields[name]
         if name == "VWAP":
